@@ -1,4 +1,4 @@
-
+import os
 import subprocess
 import uuid
 
@@ -10,7 +10,10 @@ def main():
     # Give this test container a unique name.
     name = f"cses-timeout-{uuid.uuid4().hex[:8]}"
 
-    # Start a container running an infinite loop.
+    os.makedirs("logs",exist_ok=True)
+    log_path= f"logs/{name}.log"
+
+    # Start a container running a test process.
     start = subprocess.run(
         [
             "docker", "run", "-d",
@@ -20,7 +23,7 @@ def main():
             "--pids-limit=64",
             "--network=none",
             IMAGE,
-            "python", "-c", "while True: pass",
+            "python", "-c", "import sys; print('Bot crashed'); sys.exit(1)",
         ],
         capture_output=True,
         text=True,
@@ -43,9 +46,19 @@ def main():
             check=True,
         )
 
-        print(f"Container exited naturally: {result.stdout.strip()}")
+        exit_code = int(result.stdout.strip())
+
+        if exit_code == 0:
+            print("Outcome: completed")
+
+        else:
+            print("Outcome : failed")
+
+        print(f"Exit code : {exit_code}")        
 
     except subprocess.TimeoutExpired:
+
+        print("Outcome : Timed out")
         print("Time limit exceeded. Stopping container...")
 
         stop = subprocess.run(
@@ -60,12 +73,27 @@ def main():
             print("Stop failed:", stop.stderr)
 
     finally:
+        # Capture container output before removing it.
+        logs = subprocess.run(
+            ["docker", "logs", name],
+            capture_output=True,
+            text=True,
+        )
+
+        # Save the output to a file.
+        with open(log_path, "w") as log_file:
+            log_file.write(logs.stdout)
+            log_file.write(logs.stderr)
+
+        print(f"Container logs saved to {log_path}")
+
         # Remove the container even if the test fails.
         subprocess.run(
             ["docker", "rm", "-f", name],
             capture_output=True,
             text=True,
         )
+
         print("Container cleanup complete.")
 
 
