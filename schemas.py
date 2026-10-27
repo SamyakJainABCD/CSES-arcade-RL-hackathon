@@ -33,7 +33,7 @@ class EjectionStatus:
 
 
 # given to the bot during its turn in PLAY stage.
-class GameState_PLAY:
+class Obs_PLAY:
     max_health: int
     players: List[Player]
     turn: int
@@ -50,7 +50,7 @@ class GameState_PLAY:
     next_round: NextRound
 
 # given to the bot during its turn in PICK_UPGRADES stage.
-class GameState_PICK_UPGRADES:
+class Obs_PICK_UPGRADES:
     max_health: int
     players: List[Player]
     turn: int
@@ -74,7 +74,7 @@ class UpgradeType(Enum):
 
 class Action_PLAY:
     action: ActionType
-    useUpgade: UpgradeType
+    useUpgrade: UpgradeType
     target: int | None  # Required if action is USE_UPGRADE POOL_FLOATIE or SHOOT
 
 class Action_PICK_UPGRADES:
