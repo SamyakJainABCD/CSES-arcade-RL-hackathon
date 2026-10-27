@@ -27,6 +27,7 @@ class GameState:
     player_next_round_view: NextRound
     rng: random.Random
     game_over: bool
+    elimination_order: List[int]  # player indices in the order they died
 
 
 def _new_upgrade_counts() -> UpgradeCounts:
@@ -254,8 +255,29 @@ def initGame(seed: int, num_players: int = 2) -> GameState:
     state.turn = 0
     state.session_no = 0
     state.game_over = False
+    state.elimination_order = []
     _setup_round(state)
     return state
+
+
+def eliminate_player(state: GameState, player_index: int) -> None:
+    """Remove a player from the game outside of normal play (e.g. disqualification)."""
+    player = state.players[player_index]
+    if player.health <= 0 or state.game_over:
+        return
+    player.health = 0
+    state.alive_players -= 1
+    state.elimination_order.append(player_index)
+    if state.alive_players <= 1:
+        state.game_over = True
+    elif state.turn == player_index:
+        state.turn = _advance_turn(state, player_index, skip_floaties=False)
+        state.player_next_round_view = NextRound.UNKNOWN
+
+
+# public names for the engine
+play_observation = _play_observation
+upgrade_observation = _upgrade_observation
 
 
 def step_PLAY(state: GameState, action: Action_PLAY) -> Obs_PLAY:
@@ -287,6 +309,7 @@ def step_PLAY(state: GameState, action: Action_PLAY) -> Obs_PLAY:
         state.players[target].health = max(0, previous_health - state.damage)
         if previous_health > 0 and state.players[target].health == 0:
             state.alive_players -= 1
+            state.elimination_order.append(target)
     else:
         state.blanks_shot += 1
     state.damage = 1
@@ -334,3 +357,5 @@ def step_PICK_UPGRADES(state: GameState, action: Action_PICK_UPGRADES) -> Obs_PI
     else:
         state.turn = _advance_turn(state, current_turn, skip_floaties=True)
     return _upgrade_observation(state)
+
+step_PICK_UPGRADE = step_PICK_UPGRADES
