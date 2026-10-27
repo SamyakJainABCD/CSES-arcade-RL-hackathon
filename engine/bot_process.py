@@ -23,7 +23,7 @@ class BotFault(Exception):
 
 class BotProcess:
     def __init__(self, submission_dir: str, backend: str = "docker", image: str = "cses-arcade-sandbox",
-                 memory: str = "256m", cpus: str = "1", stderr_path: Optional[str] = None):
+                 memory: str = "128m", cpus: str = "1", stderr_path: Optional[str] = None):
         self.submission_dir = os.path.abspath(submission_dir)
         self.backend = backend
         self.name = f"cses-bot-{uuid.uuid4().hex[:10]}"
