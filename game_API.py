@@ -131,15 +131,8 @@ def _generate_upgrades(state: GameState) -> UpgradeCounts:
         available_types.extend([UpgradeType.POOL_FLOATIE, UpgradeType.HAND_SAW])
 
     counts = _new_upgrade_counts()
-    count_by_type = {
-        UpgradeType.JUICE: "juice",
-        UpgradeType.COFFEE: "coffee",
-        UpgradeType.MAG_GLASS: "mag_glass",
-        UpgradeType.POOL_FLOATIE: "pool_floatie",
-        UpgradeType.HAND_SAW: "hand_saw",
-    }
     for _ in range(upgrade_count):
-        attribute = count_by_type[state.rng.choice(available_types)]
+        attribute = state.rng.choice(available_types).value
         setattr(counts, attribute, getattr(counts, attribute) + 1)
     return counts
 
@@ -189,15 +182,9 @@ def _upgrade_observation(state: GameState) -> Obs_PICK_UPGRADES:
 def _use_upgrade(state: GameState, upgrade_type: UpgradeType, target: int | None) -> bool:
     player_index = state.turn
     player = state.players[player_index]
-    inventory_attribute = {
-        UpgradeType.JUICE: "juice",
-        UpgradeType.COFFEE: "coffee",
-        UpgradeType.MAG_GLASS: "mag_glass",
-        UpgradeType.POOL_FLOATIE: "pool_floatie",
-        UpgradeType.HAND_SAW: "hand_saw",
-    }.get(upgrade_type)
-    if inventory_attribute is None:
+    if not isinstance(upgrade_type, UpgradeType):
         raise ValueError("Unknown upgrade type")
+    inventory_attribute = upgrade_type.value
     if getattr(player.upgrades, inventory_attribute) <= 0:
         raise ValueError("Player does not have that upgrade")
 
@@ -309,13 +296,7 @@ def step_PICK_UPGRADES(state: GameState, action: Action_PICK_UPGRADES) -> Obs_PI
         raise ValueError("No upgrades are available")
 
     upgrade_type = action.chosen_upgrade
-    count_attribute = {
-        UpgradeType.JUICE: "juice",
-        UpgradeType.COFFEE: "coffee",
-        UpgradeType.MAG_GLASS: "mag_glass",
-        UpgradeType.POOL_FLOATIE: "pool_floatie",
-        UpgradeType.HAND_SAW: "hand_saw",
-    }.get(upgrade_type)
+    count_attribute = upgrade_type.value if isinstance(upgrade_type, UpgradeType) else None
     if count_attribute is None or getattr(state.available_upgrades, count_attribute) <= 0:
         raise ValueError("That upgrade is not available")
 

@@ -65,11 +65,11 @@ class ActionType(Enum):
 
 
 class UpgradeType(Enum):
-    JUICE = "JUICE"
-    COFFEE = "COFFEE"
-    MAG_GLASS = "MAG_GLASS"
-    POOL_FLOATIE = "POOL_FLOATIE"
-    HAND_SAW = "HAND_SAW"
+    JUICE = "juice"
+    COFFEE = "coffee"
+    MAG_GLASS = "mag_glass"
+    POOL_FLOATIE = "pool_floatie"
+    HAND_SAW = "hand_saw"
 
 
 class Action_PLAY:
