@@ -21,7 +21,6 @@ engine/
   tournament.py        scheduling (balanced groups, finalists), parallel run, resume
   validate.py          smoke-test one submission
   export_logs.py       split match logs into one training file per model
-scripts/test_container_timeout.py   original docker timeout experiment
 ```
 
 ## Architecture
@@ -257,4 +256,3 @@ Remaining limitations and unverified features:
 - The sandbox image contains only the standard library: participants needing numpy/torch need an
   image change, and 128m / 5 MB will not fit large models.
 - Phase 2 uses the same `--seeds` as phase 1 (no separate flag).
-- `scripts/test_container_timeout.py` comes from the Docker branch and is not used by the engine.
