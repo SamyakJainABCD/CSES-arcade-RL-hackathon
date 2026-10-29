@@ -217,8 +217,14 @@ Ranking is by `avg_points`, then `avg_place`.
 
 ## How long will it take?
 
-Measured: about 13 matches per second (local backend, 12 cores). Docker will be slower because of
-container startup, which dominates the cost. The limits only bound the worst case.
+Measured performance:
+
+- Local backend: about 13 matches per second on a 12-core machine (existing measurement).
+- Docker backend: 10 four-player matches averaged **3.530 seconds per match** on the test machine,
+  including container startup, gameplay, and cleanup. Individual matches took 3.448–3.641 seconds.
+  This is a small benchmark; performance may vary with hardware and system load.
+
+Docker startup dominates the cost. The limits only bound the worst case.
 
 Matches = groups * k! * seeds. For 50 bots, the full plan (all 230,300 groups, 100 seeds) is 552.7
 million matches, which is not feasible (hundreds of days). Sample instead:
@@ -237,10 +243,12 @@ Tested with the local backend: crash / slow / illegal-move / over-budget / overs
 submissions, determinism across worker counts (for seeded bots), balanced groups, finalists,
 deadline, resume, log export.
 
-Not done or not verified:
+Remaining limitations and unverified features:
 
-- **The Docker backend has never been run** (Docker was not installed in the development
-  environment). Build the image and run `engine.validate` first.
+- **Docker backend tested:** image built successfully and `engine.validate` passed for 10 games.
+  Sandbox checks confirmed memory enforcement (128 MB), network isolation, read-only root
+  filesystem, and read-only submission mount. A deliberately slow bot was disqualified after
+  two timeout strikes, and its container was cleaned up.
 - No automated unit tests; no participant-facing problem statement beyond this file.
 - The sandbox image contains only the standard library: participants needing numpy/torch need an
   image change, and 128m / 5 MB will not fit large models.
