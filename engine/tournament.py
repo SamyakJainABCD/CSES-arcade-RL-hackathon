@@ -60,15 +60,34 @@ def build_schedule(groups: list, seeds: int, tournament_seed: int, tag: str) -> 
 def load_submissions(paths, root, limits):
     paths = list(paths)
     if root:
-        paths += sorted(os.path.join(root, d) for d in os.listdir(root)
-                        if os.path.isdir(os.path.join(root, d)))
+        paths += sorted(
+            os.path.join(root, d)
+            for d in os.listdir(root)
+            if os.path.isdir(os.path.join(root, d))
+        )
+
     subs = []
+    name_counts = {}
+    used_names = set()
+
     for path in paths:
         problems = submission_problems(path, limits)
         if problems:
             print(f"rejected {path}: {'; '.join(problems)}")
-        else:
-            subs.append(Submission(os.path.basename(os.path.normpath(path)), path))
+            continue
+
+        base_name = os.path.basename(os.path.normpath(path))
+        count = name_counts.get(base_name, 0) + 1
+        name = base_name if count == 1 else f"{base_name}#{count}"
+
+        while name in used_names:
+            count += 1
+            name = f"{base_name}#{count}"
+
+        name_counts[base_name] = count
+        used_names.add(name)
+        subs.append(Submission(name, path))
+
     return subs
 
 
@@ -94,8 +113,6 @@ def main() -> None:
     subs = load_submissions(args.submissions, args.root, limits)
     if len(subs) < 2:
         ap.error("need at least 2 valid submissions")
-    if len({s.name for s in subs}) != len(subs):
-        ap.error("submission directory names must be unique")
     k = min(args.group_size, len(subs))
 
     os.makedirs(os.path.join(args.out, "logs"), exist_ok=True)
