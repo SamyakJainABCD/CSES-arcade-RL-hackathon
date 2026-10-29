@@ -17,11 +17,10 @@ engine/
   limits.py            all time and size limits (one dataclass)
   bot_process.py       starts one sandboxed bot (docker or local), timeouts, line protocol
   run_match.py         plays one match, fault handling, writes the log
-  scoring.py           placement points, leaderboard, optional OpenSkill rating
+  scoring.py           placement points, leaderboard
   tournament.py        scheduling (balanced groups, finalists), parallel run, resume
   validate.py          smoke-test one submission
   export_logs.py       split match logs into one training file per model
-scripts/test_container_timeout.py   original docker timeout experiment
 ```
 
 ## Architecture
@@ -119,7 +118,6 @@ Memory 128m and size 5 MB are very small: numpy/torch may not fit. Tell particip
 
 ```
 docker build -t cses-arcade-sandbox .          # sandbox image; rebuild after changing schemas.py, wire.py or sandbox/
-pip install openskill                           # optional: adds a `skill` rating column
 ```
 
 `--backend local` runs bots as plain subprocesses with no isolation or limits except the timeouts.
@@ -214,8 +212,7 @@ Training line: the decision line plus `match_id, seed, placement, points`.
 ### Scoring
 
 Points by placement for a k-player match: `(k-1) - 2*(place-1)`, so 3, 1, -1, -3 for 4 players.
-Leaderboard columns: `rank, name, matches, avg_points, win_rate, avg_place, faults, disqualified`,
-and `skill` (OpenSkill Plackett-Luce, `mu - 3*sigma`) if openskill is installed.
+Leaderboard columns: `rank, name, matches, avg_points, win_rate, avg_place, faults, disqualified`.
 Ranking is by `avg_points`, then `avg_place`.
 
 ## How long will it take?
@@ -244,9 +241,7 @@ Not done or not verified:
 
 - **The Docker backend has never been run** (Docker was not installed in the development
   environment). Build the image and run `engine.validate` first.
-- The OpenSkill path has not been run (package not installed).
 - No automated unit tests; no participant-facing problem statement beyond this file.
 - The sandbox image contains only the standard library: participants needing numpy/torch need an
   image change, and 128m / 5 MB will not fit large models.
 - Phase 2 uses the same `--seeds` as phase 1 (no separate flag).
-- `scripts/test_container_timeout.py` comes from the Docker branch and is not used by the engine.
