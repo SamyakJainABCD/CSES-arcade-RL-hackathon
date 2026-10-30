@@ -1,255 +1,246 @@
 # Buckshot Roulette RL Hackathon: game API and evaluation engine
 
-Participants submit a `bot.py` with a `Bot` class. The engine plays their bots against each other
-in 2–4 player Buckshot Roulette matches, each bot in its own sandbox, and produces a leaderboard
-plus per-model training logs.
+## Arcade RL Hackathon by CSES NITW
 
-## Layout
+This repository is for the Arcade RL Hackathon organized by CSES, NIT Warangal (NITW). Use it to
+build, train, and evaluate bots for the Buckshot Roulette game.
 
-```
-schemas.py             data classes: observations, actions, enums (given)
-game_API.py            the game simulation (initGame, step_PLAY, step_PICK_UPGRADE, ...)
-wire.py                observation/action <-> JSON, shared by engine and sandbox
-sandbox/runner.py      runs inside the container: loads the Bot, answers JSON-line requests
-Dockerfile             sandbox image (python:3.12-slim, non-root)
-bots/random_bot/       baseline bot (also the opponent used by validation)
-engine/
-  limits.py            all time and size limits (one dataclass)
-  bot_process.py       starts one sandboxed bot (docker or local), timeouts, line protocol
-  run_match.py         plays one match, fault handling, writes the log
-  scoring.py           placement points, leaderboard
-  tournament.py        scheduling (balanced groups, finalists), parallel run, resume
-  validate.py          smoke-test one submission
-  export_logs.py       split match logs into one training file per model
-```
+There are two ways to get training experience:
 
-## Architecture
+- Use `game_API.py` to generate your own games, self-play trajectories, or training data.
+- Use tournament game logs for offline reinforcement learning, or strategy
+  analysis.
 
-```
-host (trusted)                         sandbox (untrusted, one per bot)
-engine/run_match.py                    sandbox/runner.py  ->  submission/bot.py
-  holds the real GameState   -- obs -->   Bot.play / Bot.pick_upgrade
-  (shell order, RNG)         <- action --
+Your final submission is a bot that follows the interface below.
+
+## Get Started
+
+A submission is a directory containing `bot.py`. It may also contain `params.json` and model files.
+
+```text
+my_bot/
+  bot.py
+  params.json       # optional JSON object passed to init
+  model.bin         # optional model or other files
 ```
 
-- The real `GameState` (including the hidden shell order) stays on the host. A bot only receives its
-  own per-player observation, so it cannot read hidden information.
-- Each bot gets one long-lived container per match: `--network=none`, memory/CPU/pid limits,
-  read-only root filesystem, 64 MB tmpfs, all capabilities dropped, submission mounted read-only
-  at `/submission`.
-- Bot output (`print`) is redirected to stderr, so it cannot corrupt the protocol.
-
-## Game as implemented (`game_API.py`)
-
-- 2–4 players, health 5, no starting items.
-- Session `s` (0-based): `2 * (s+1) * alive_players` shells, between 25% and 80% live.
-- Shooting yourself with a blank gives another turn. Only a live shot damages (1, +1 per hand saw used).
-- After a session ends: upgrade stage; `min(3*(s+1)*alive, 16*alive)` upgrades are offered and players
-  pick one at a time in turn order. Session 0 offers juice, coffee, magnifying glass; later sessions
-  also pool floatie and hand saw.
-- Last player alive wins. `GameState.elimination_order` records deaths and gives placements.
-- Added to the API: `elimination_order`, `eliminate_player()` (disqualification),
-  `play_observation` / `upgrade_observation` (public names), `step_PICK_UPGRADE` (alias of
-  `step_PICK_UPGRADES`).
-
-## Writing a bot (participant interface)
-
-A submission is a directory containing:
-
-| File | Required | Purpose |
-|---|---|---|
-| `bot.py` | yes | defines `class Bot` |
-| `params.json` | no | JSON object passed to the bot's `init` |
-| model files, other code | no | anything `bot.py` needs (imports resolve from the submission directory) |
+The bot must define a `Bot` class:
 
 ```python
-from schemas import *          # Action_PLAY, ActionType, UpgradeType, NextRound, ...
+from schemas import Action_PLAY, Action_PICK_UPGRADES, ActionType, UpgradeType
 
 class Bot:
-    def init(self, params=None):       # called once per match; params = params.json contents
-        ...
-    def play(self, obs):               # obs: Obs_PLAY  -> return Action_PLAY
-        ...
-    def pick_upgrade(self, obs):       # obs: Obs_PICK_UPGRADES -> return Action_PICK_UPGRADES
-        ...
+    def init(self, params=None):
+        # Called once at the start of each match.
+        pass
+
+    def play(self, obs):
+        # Called during the PLAY stage.
+        action = Action_PLAY()
+        action.action = ActionType.SHOOT
+        action.useUpgrade = None
+        action.target = obs.turn
+        return action
+
+    def pick_upgrade(self, obs):
+        # Called during the upgrade selection stage.
+        action = Action_PICK_UPGRADES()
+        action.chosen_upgrade = UpgradeType.JUICE
+        return action
 ```
 
-`init` may take no arguments. If `Bot()` itself requires an argument, it receives the params dict.
+`init` may take no arguments. If constructing `Bot` requires an argument, the engine passes it the
+params dictionary.
 
-Actions:
+## Train With the Simulator
 
-- Shoot: `ActionType.SHOOT`, `target=<player index>` (yourself or a living opponent).
-- Use an upgrade: `ActionType.USE_UPGRADE`, `useUpgrade=UpgradeType.X`; `target` required only for
-  `POOL_FLOATIE` (a living player other than yourself without a pending skip).
-- You may use any number of upgrades per turn before shooting. Each `play` call is one action.
-- Upgrade pick: `Action_PICK_UPGRADES` with `chosen_upgrade` set to a type that is still available.
+`game_API.py` provides the game state and turn-by-turn simulation functions. Use it to create
+rollouts, run self-play, test strategies, or generate data for your training pipeline.
 
-Observations (see `schemas.py`): `Obs_PLAY` has players' health/upgrades, `turn` (your own index),
-shell counts, `ejections` (what *you* know about ejected shells; others' ejections are `unknowns`),
-and `next_round` (`UNKNOWN` unless you just used the magnifying glass).
+- `initGame(seed, num_players=2)` creates a seeded game for 2–4 players.
+- `play_observation(state)` and `upgrade_observation(state)` return the current player's observation.
+- `step_PLAY(state, action)` applies a play action.
+- `step_PICK_UPGRADE(state, action)` applies an upgrade selection.
+- `eliminate_player(state, player_index)` removes a player from a game.
 
-## Limits (`engine/limits.py`)
+In a simulation loop, check `state.stage`, get the matching observation, choose an action, and pass
+it to the corresponding step function. The game ends when `state.game_over` becomes true. Use
+different seeds for varied games and fixed seeds to reproduce a game.
 
-| Limit | Default | When exceeded |
-|---|---|---|
-| Per-move timeout | 0.05 s | timeout fault (strike); a safe default move is played |
-| Init timeout | 2 s | bot is disqualified |
-| Decision time per bot per match | 0.5 s | `budget` fault, bot is disqualified |
-| Strikes | 2 | bot is disqualified |
-| Actions per match | 300 | match ends; survivors ranked by health |
-| Container memory | 128m | container is killed |
-| Submission size | 5 MB | rejected by validation and by the tournament |
-| Bot output line | 64 KB | treated as a crash |
+**Use observations as the model input, not hidden state.** `GameState` contains information that
+players cannot see, including the shell order in `round_contents`. For realistic training and
+evaluation, make decisions using only `play_observation` or `upgrade_observation`, just as a
+submitted bot does.
 
-Faults: `timeout`, `error` (bot raised), `invalid` (unparseable action), `illegal` (rejected by the
-game), `crash`, `budget`. Crash and budget disqualify immediately. A disqualified bot is eliminated
-from the game and places below everyone still alive.
-Worst-case time of a 4-bot match: `4 * (init_timeout + bot_time_budget)` = 10 s.
+## Train From Tournament Logs
 
-Timeouts are wall-clock. Running too many parallel matches on a loaded host causes false timeouts
-(measured: 20 ms with 16 workers on 12 cores gave faults in 8 of 240 matches; 50 ms was clean).
-The default `--workers` is half the CPU count for this reason.
+Each match log contains one JSON object per decision, followed by a match summary. Decision records
+include the observation seen by the acting bot and, when available, the action it returned. The
+summary includes the seed, bots, placements, faults, and final health.
 
-Memory 128m and size 5 MB are very small: numpy/torch may not fit. Tell participants.
+After a tournament, export completed matches into one JSONL file per model:
 
-## Commands
-
-### Setup
-
-```
-docker build -t cses-arcade-sandbox .          # sandbox image; rebuild after changing schemas.py, wire.py or sandbox/
+```bash
+python -m engine.export_logs out/
 ```
 
-`--backend local` runs bots as plain subprocesses with no isolation or limits except the timeouts.
-Use it for development only; tournaments must use `--backend docker` (the default).
+The exported files are written to `out/training/`. Each row includes the decision record and match
+metadata such as `match_id`, `seed`, `placement`, and `points`. Use them to imitate policies, compare
+decisions across states, build offline datasets, or analyze strategies and failure cases.
 
-### Validate a submission
+The logged action is what that bot chose, not necessarily an expert or optimal action. Fault records
+may not contain an action. Export skips initialization failures and incomplete matches.
 
+## Actions and Observations
+
+During the `PLAY` stage, return one of these actions:
+
+- **Shoot:** set `action` to `ActionType.SHOOT` and `target` to a living player's index. You may
+  target yourself.
+- **Use an upgrade:** set `action` to `ActionType.USE_UPGRADE` and `useUpgrade` to an available
+  upgrade. `POOL_FLOATIE` also requires a target: a different living player without a pending skip.
+
+During the upgrade selection stage, choose an upgrade that is still available in
+`obs.available_upgrades`. Upgrade types are `JUICE`, `COFFEE`, `MAG_GLASS`, `POOL_FLOATIE`, and
+`HAND_SAW`; not every type is available in every session.
+
+See `schemas.py` for all fields. Play observations include player health and upgrades, your player
+index, session and shell counts, your ejection information, and any known next-shell information.
+They do not reveal the hidden shell order or other players' private ejection information.
+
+## Game Rules
+
+Buckshot Roulette is a 2–4 player turn-based game. Everyone starts with 5 health and no upgrades. At the
+start of each round, players see how many live and blank shells are in the gun, but not their order. Players take
+turns shooting a living player or themselves. A live shell damages its target; shooting yourself with a blank
+grants another turn. Play continues until the gun is empty or one player remains. After each round, players
+take turns choosing from the available upgrades. Each player can hold at most 15 upgrades; any upgrade picked
+after reaching this limit is discarded:
+
+
+• Juice restores 1 health, up to 5.
+
+
+• Coffee ejects the next shell and privately reveals whether it was live or blank.
+
+
+• Magnifying Glass privately reveals whether the next shell is live or blank.
+
+
+• From round two onward, Pool Floatie can make another player skip their next play stage turn.
+
+
+• From round two onward, Hand Saw increases the next live shot’s damage by 1 and can stack.
+
+
+On a play turn, a bot may use upgrades before shooting; each use is a separate action. The last player alive
+wins. If the action limit is reached, remaining players are ranked by health. The implemented
+rules are defined in `game_API.py`.
+
+## Test Your Bot
+
+Run a few matches against baseline random bots using the local backend:
+
+```bash
+python -m engine.validate my_bot/ --backend local
 ```
-python -m engine.validate SUBMISSION_DIR [--backend docker|local] [--image NAME] [--games 3]
+
+The local backend is convenient for development but does not isolate your code. To test using the
+Docker sandbox, build the image and run validation:
+
+```bash
+docker build -t cses-arcade-sandbox .
+python -m engine.validate my_bot/ --backend docker
 ```
 
-Plays `--games` matches with the submission in seat 0 against three baseline random bots, prints
-placement / actions / time used per game, shows stderr and the first fault on failure, and exits 1
-if there is any problem (missing `bot.py`, too large, any fault).
+Validation reports crashes, invalid actions, illegal moves, and timeouts.
 
-### Run a tournament (or a single eval)
+## Run a Tournament
 
-```
-python -m engine.tournament [SUBMISSION_DIR ...] [--root DIR] [options]
-```
+Evaluate two or more submissions:
 
-| Option | Default | Meaning |
-|---|---|---|
-| `--root DIR` | | add every subdirectory of DIR as a submission (invalid ones are reported and skipped) |
-| `--seeds N` | 5 | seeds per group; every seating of the group is played on each seed |
-| `--group-size K` | 4 | players per match (capped at the number of submissions) |
-| `--max-groups G` | 50 | if C(n,K) > G, use G balanced groups; applies to both phases |
-| `--finalists M` | 0 | phase 2: rank after phase 1, then play groups drawn from the top M |
-| `--tournament-seed S` | 0 | seeds the group sampling and the match seeds |
-| `--deadline SEC` | none | stop starting new matches after SEC seconds |
-| `--out DIR` | `out` | output directory |
-| `--backend` | `docker` | `docker` or `local` |
-| `--image` | `cses-arcade-sandbox` | docker image |
-| `--workers W` | cpu/2 | matches in parallel (each uses K bot processes) |
-| `--move-timeout SEC` | 0.05 | override the per-move timeout |
-| `--bot-time-budget SEC` | 0.5 | override the per-bot decision-time budget |
-
-Examples:
-
-```
-# eval 2-4 models: k! * seeds matches
-python -m engine.tournament subs/a subs/b subs/c subs/d --seeds 100
-
-# full leaderboard run
-python -m engine.tournament --root submissions/ --max-groups 200 --seeds 5 --finalists 12 --deadline 10800
-
-# dev run without docker
-python -m engine.tournament bots/random_bot subs/a --backend local --seeds 10
+```bash
+python -m engine.tournament my_bot/ bots/random_bot --backend local --seeds 10
 ```
 
-Behaviour:
+Or evaluate submission directories under a root folder:
 
-- **Seeds and seating.** For each group and seed index one game seed is derived
-  (`sha256(tournament_seed|phase|group|seed_idx)`), and the group plays all k! seatings on it, so
-  seat order and shell luck cancel out. A match can be replayed exactly from its seed and seating.
-- **Balanced groups.** If all C(n,K) groups fit under `--max-groups` they are all played; otherwise
-  groups are filled greedily with the least-used bots, so everyone plays about equally often.
-- **Order and deadline.** Matches run seed by seed across groups, so a run cut off by `--deadline`
-  still has even coverage.
-- **Resume.** Each finished match is appended to `results.jsonl`; rerunning the same command skips
-  matches already present. Use the same options (seed, groups) when resuming.
-- **Phase 2.** The top `--finalists` bots by phase-1 leaderboard get new groups (same `--seeds`).
-  The final leaderboard counts all matches from both phases.
-
-Match id format: `p1_g0-2-7-9_s3_p0279` = phase 1, group of submissions 0,2,7,9, seed index 3,
-seating (seat 0 = submission 0, seat 1 = 2, seat 2 = 7, seat 3 = 9).
-
-### Export training logs
-
+```bash
+python -m engine.tournament --root submissions/ --max-groups 200 --seeds 5 --out out/
 ```
-python -m engine.export_logs out/        # writes out/training/<model>.jsonl
-```
+
+The default backend is Docker. Run `python -m engine.tournament --help` to see options for group
+size, seeds, workers, finalists, deadlines, and time budgets. Tournament output includes match
+summaries, decision logs, and a leaderboard. Use the same options when resuming a run so completed
+matches can be recognized.
+
+### Submission Limits (Enforced by evaluation engine)
+
+Each bot runs in one long-lived container for the duration of a match. Docker disables networking,
+limits memory, CPU, and process count, uses a read-only root filesystem with a 64 MB `/tmp`, drops
+all Linux capabilities, and mounts the submission directory read-only at `/submission`. Bot
+`print()` output is redirected to stderr, keeping it separate from the JSON-lines protocol.
+
+Default limits are:
+
+| Limit | Default |
+|---|---:|
+| Time per decision | 0.05 seconds |
+| Total decision time per bot per match | 0.5 seconds |
+| Initialization time | 2 seconds |
+| Container memory | 128 MB |
+| Submission directory size | 5 MB |
+| Actions per match | 300 |
+
+Faults are recorded as `timeout` (wall-clock deadline exceeded), `error` (the bot raised an
+exception), `invalid` (the action could not be parsed), `illegal` (the game rejected the action),
+`crash` (the bot process failed), or `budget` (the bot used its total decision-time allowance).
+`crash` and `budget` disqualify a bot immediately; other fault kinds count toward the default
+two-strike disqualification limit. A disqualified bot is eliminated and placed below every bot
+still alive.
+
+The worst-case duration of a four-bot match is `4 * (init_timeout + bot_time_budget)`, or 10 seconds
+with the defaults. Timeouts use wall-clock time, so excessive parallelism on a loaded host can cause
+false timeout faults. In one measured run, 16 workers on 12 cores with a 20 ms decision timeout
+caused faults in 8 of 240 matches; 50 ms was clean. By default, `--workers` is half the CPU count
+(at least one) to reduce this risk.
+
+The Docker image contains Python's standard library. The 128 MB memory and 5 MB submission-size
+limits are very small, so packages such as NumPy or PyTorch may not fit. The local backend is for
+development and does not provide Docker's isolation or resource limits.
 
 ### Output files (`--out DIR`)
 
 | File | Content |
 |---|---|
-| `results.jsonl` | one match summary per line |
-| `logs/<match_id>.jsonl` | one line per decision, last line `{"summary": ...}` |
-| `leaderboard.json`, `leaderboard.csv` | final ranking |
-| `training/<model>.jsonl` | after `export_logs`: that model's decisions |
+| `results.jsonl` | One match summary per line. |
+| `logs/<match_id>.jsonl` | One line per decision, followed by a final `{"summary": ...}` line. |
+| `leaderboard.json`, `leaderboard.csv` | Final rankings. |
+| `training/<model>.jsonl` | The model's decision records, created by `python -m engine.export_logs DIR`. |
 
-Match summary: `match_id, seed, seats (names), placements (1 = winner, by seat), winner (seat),
-reason (last_alive | max_actions), actions, faults (per seat, by kind), disqualified, time_used
-(seconds per seat), final_health`.
+A match summary contains `match_id`, `seed`, `seats` (bot names), `placements` (placement by seat,
+with 1 as the winner), `winner` (winning seat), `reason` (`last_alive` or `max_actions`), `actions`,
+`faults` (counts per seat and fault kind), `disqualified`, `time_used` (seconds per seat), and
+`final_health`. Each decision record contains `step`, `seat`, `stage`, `obs`, and `action`; failed
+moves also include `fault` and `detail`. A bot that fails during startup gets a record with
+`stage: "INIT"`.
 
-Decision log line: `step, seat, stage, obs, action` plus `fault` and `detail` if the move failed.
-A bot that fails to start gets a line with `stage: "INIT"`.
+Exported training records add `match_id`, `seed`, `placement`, and `points` to each decision record.
+For a match with `k` players, points are `(k - 1) - 2 * (place - 1)` (3, 1, -1, -3 in a four-player
+match). The leaderboard columns are `rank`, `name`, `matches`, `avg_points`, `win_rate`, `avg_place`,
+`faults`, and `disqualified`; ranking is by `avg_points`, then `avg_place`.
 
-Training line: the decision line plus `match_id, seed, placement, points`.
+## Repository Guide
 
-### Scoring
+- `game_API.py`: game simulation and state transitions
+- `schemas.py`: observations, actions, and enums
+- `wire.py`: JSON conversion used by the engine and sandbox
+- `sandbox/runner.py`: loads a submitted bot and handles requests
+- `engine/validate.py`: submission smoke tests
+- `engine/tournament.py`: tournament scheduling and execution
+- `engine/run_match.py`: runs one match and writes its log
+- `engine/export_logs.py`: exports per-model training data
+- `bots/random_bot/`: baseline bot
+- `Dockerfile`: sandbox image configuration
 
-Points by placement for a k-player match: `(k-1) - 2*(place-1)`, so 3, 1, -1, -3 for 4 players.
-Leaderboard columns: `rank, name, matches, avg_points, win_rate, avg_place, faults, disqualified`.
-Ranking is by `avg_points`, then `avg_place`.
-
-## How long will it take?
-
-Measured performance:
-
-- Local backend: about 13 matches per second on a 12-core machine (existing measurement).
-- Docker backend: 10 four-player matches averaged **3.530 seconds per match** on the test machine,
-  including container startup, gameplay, and cleanup. Individual matches took 3.448–3.641 seconds.
-  This is a small benchmark; performance may vary with hardware and system load.
-
-Docker startup dominates the cost. The limits only bound the worst case.
-
-Matches = groups * k! * seeds. For 50 bots, the full plan (all 230,300 groups, 100 seeds) is 552.7
-million matches, which is not feasible (hundreds of days). Sample instead:
-
-| Setup | Matches | Time at 13/s |
-|---|---|---|
-| 200 groups, 5 seeds | 24,000 | about 31 min |
-| 500 groups, 10 seeds | 120,000 | about 2.6 h |
-| 200 groups, 5 seeds, plus `--finalists 12` (capped at 200 groups) | 48,000 | about 1 h |
-
-Reusing bot containers across matches would be the main speed-up (not built).
-
-## Status and known gaps
-
-Tested with the local backend: crash / slow / illegal-move / over-budget / oversize / missing-`bot.py`
-submissions, determinism across worker counts (for seeded bots), balanced groups, finalists,
-deadline, resume, log export.
-
-Remaining limitations and unverified features:
-
-- **Docker backend tested:** image built successfully and `engine.validate` passed for 10 games.
-  Sandbox checks confirmed memory enforcement (128 MB), network isolation, read-only root
-  filesystem, and read-only submission mount. A deliberately slow bot was disqualified after
-  two timeout strikes, and its container was cleaned up.
-- No automated unit tests; no participant-facing problem statement beyond this file.
-- The sandbox image contains only the standard library: participants needing numpy/torch need an
-  image change, and 128m / 5 MB will not fit large models.
-- Phase 2 uses the same `--seeds` as phase 1 (no separate flag).
+## You can check out the game at [Buckshot Roulette by CSES NITW](https://github.com/csesnitw/buckshot-roulette) to play and maybe get a better idea about it!

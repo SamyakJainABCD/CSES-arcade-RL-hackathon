@@ -126,7 +126,7 @@ def _advance_turn(state: GameState, from_turn: int, skip_floaties: bool) -> int:
 
 def _generate_upgrades(state: GameState) -> UpgradeCounts:
     alive_count = state.alive_players
-    upgrade_count = min(3 * (state.session_no + 1) * alive_count, 16 * alive_count)
+    upgrade_count = min(3 * (state.session_no + 1) * alive_count, 15 * alive_count)
     available_types = [UpgradeType.JUICE, UpgradeType.COFFEE, UpgradeType.MAG_GLASS]
     if state.session_no >= 1:
         available_types.extend([UpgradeType.POOL_FLOATIE, UpgradeType.HAND_SAW])
@@ -343,7 +343,11 @@ def step_PICK_UPGRADES(state: GameState, action: Action_PICK_UPGRADES) -> Obs_PI
         raise ValueError("That upgrade is not available")
 
     player = state.players[state.turn]
-    setattr(player.upgrades, count_attribute, getattr(player.upgrades, count_attribute) + 1)
+    total_upgrades = sum(getattr(player.upgrades, name) for name in (
+        "juice", "coffee", "mag_glass", "pool_floatie", "hand_saw"
+    ))
+    if total_upgrades < 15:
+        setattr(player.upgrades, count_attribute, getattr(player.upgrades, count_attribute) + 1)
     setattr(state.available_upgrades, count_attribute, getattr(state.available_upgrades, count_attribute) - 1)
 
     current_turn = state.turn
