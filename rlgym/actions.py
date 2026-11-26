@@ -36,15 +36,26 @@ def _pick(upgrade: UpgradeType) -> Action_PICK_UPGRADES:
     return action
 
 
+def _seat(me: int, rel: int, k: int) -> int:
+    if rel >= k:
+        raise ValueError(f"relative seat {rel} does not exist in a {k}-player game")
+    return (me + rel) % k
+
+
+def stage_indices(obs: Any) -> range:
+    """The action indices that belong to this observation's stage."""
+    return range(0, 11) if is_play_obs(obs) else range(11, N_ACTIONS)
+
+
 def decode(index: int, obs: Any) -> Any:
     """Turn an action index into an engine action for the player whose observation this is."""
     k, me = len(obs.players), obs.turn
     if 0 <= index <= 3:
-        return _play(ActionType.SHOOT, None, (me + index) % k)
+        return _play(ActionType.SHOOT, None, _seat(me, index, k))
     if 4 <= index <= 7:
         return _play(ActionType.USE_UPGRADE, _USE_ORDER[index - 4], None)
     if 8 <= index <= 10:
-        return _play(ActionType.USE_UPGRADE, UpgradeType.POOL_FLOATIE, (me + index - 7) % k)
+        return _play(ActionType.USE_UPGRADE, UpgradeType.POOL_FLOATIE, _seat(me, index - 7, k))
     if 11 <= index <= 15:
         return _pick(_PICK_ORDER[index - 11])
     raise ValueError(f"action index {index} out of range")
