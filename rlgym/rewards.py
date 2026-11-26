@@ -5,10 +5,11 @@ PotentialShapedReward  PlacementReward + gamma * phi(s') - phi(s), phi = health 
                        Potential-based shaping keeps the optimal policy unchanged
                        (Ng, Harada & Russell, "Policy invariance under reward
                        transformations", ICML 1999) as long as phi(terminal) = 0.
-NaiveDamageReward      counter-example: +1 per point of damage the agent deals. It is easy
-                       to farm (shoot every turn, saw everything, never take the safe
-                       self-shot) and ranks policies differently from placement. See
-                       FINDINGS.md for measurements.
+NaiveDamageReward      counter-example: +1 per point of damage the agent deals. It ignores
+                       who survives. In 4-player tables it ranks policies differently from
+                       the leaderboard: the bot that deals the most damage is not the one
+                       with the most points. Measured by `python -m redteam.run`; see
+                       FINDINGS.md.
 """
 from dataclasses import dataclass
 from typing import List, Optional
