@@ -121,7 +121,12 @@ def _advance_turn(state: GameState, from_turn: int, skip_floaties: bool) -> int:
             state.players[candidate].has_pool_floatie_on = False
             continue
         return candidate
-    return from_turn
+    if state.players[from_turn].health > 0:
+        return from_turn
+    # Every living player's floatie was just spent and from_turn is dead: hand the turn to the next one alive.
+    living = [(from_turn + offset) % player_count for offset in range(1, player_count + 1)
+              if state.players[(from_turn + offset) % player_count].health > 0]
+    return living[0] if living else from_turn
 
 
 def _generate_upgrades(state: GameState) -> UpgradeCounts:
