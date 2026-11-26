@@ -7,7 +7,8 @@ Each run gets a freshly prepared workspace and `claude -p "<task README>"` with 
 its working directory. Edits are auto-accepted and Bash is limited to python/ls. The full
 stream-json transcript is kept for every run, so failures can be explained and file accesses
 outside the workspace (the repository, hidden tests, reference solutions) can be audited.
-Writes ROOT/results.jsonl and prints a markdown table.
+Writes ROOT/results.jsonl and prints a markdown table. Re-running with the same --root reuses
+finished transcripts (and their workspaces) instead of paying for those runs again.
 
 Isolation is not airtight: an agent allowed to run python can read any file the user can. The
 audit reports every tool input that mentions the repository path or the hidden/solution
@@ -39,9 +40,10 @@ def audit(events: List[dict]) -> Dict[str, object]:
     tools: Dict[str, int] = {}
     outside: List[str] = []
     for event in events:
-        message = event.get("message") or {}
-        for block in message.get("content") or [] if isinstance(message.get("content"), list) else []:
-            if block.get("type") != "tool_use":
+        message = event.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        for block in content if isinstance(content, list) else []:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
                 continue
             tools[block["name"]] = tools.get(block["name"], 0) + 1
             text = json.dumps(block.get("input", {}))
@@ -50,15 +52,33 @@ def audit(events: List[dict]) -> Dict[str, object]:
     return {"tool_calls": tools, "outside_workspace": outside}
 
 
+def _events(text: str) -> List[dict]:
+    events = []
+    for line in text.splitlines():
+        try:
+            events.append(json.loads(line))
+        except ValueError:
+            pass
+    return events
+
+
 def run_one(task: str, run: int, root: str, budget: float, timeout: float) -> dict:
+    """Run the agent once (or reuse a finished transcript from an earlier invocation) and grade it."""
     workspace = os.path.join(root, f"{task}_run{run}", "workspace")
+    transcript = os.path.join(os.path.dirname(workspace), "transcript.jsonl")
+    if os.path.exists(transcript):
+        with open(transcript) as f:
+            events = _events(f.read())
+        if any(e.get("type") == "result" for e in events):
+            final = next(e for e in reversed(events) if e.get("type") == "result")
+            return _record(task, run, workspace, transcript, events, round(final.get("duration_ms", 0) / 1000, 1),
+                           0, False, reused=True)
     shutil.rmtree(os.path.dirname(workspace), ignore_errors=True)
     build_workspace(task, workspace)
     with open(os.path.join(workspace, "README.md")) as f:
         prompt = PROMPT.format(readme=f.read())
     cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
            "--permission-mode", "acceptEdits", "--allowedTools", *ALLOWED, "--max-budget-usd", str(budget)]
-    transcript = os.path.join(os.path.dirname(workspace), "transcript.jsonl")
     started = time.time()
     try:
         proc = subprocess.run(cmd, cwd=workspace, capture_output=True, text=True, timeout=timeout)
@@ -68,19 +88,19 @@ def run_one(task: str, run: int, root: str, budget: float, timeout: float) -> di
     seconds = round(time.time() - started, 1)
     with open(transcript, "w") as f:
         f.write(stdout)
-    events = []
-    for line in stdout.splitlines():
-        try:
-            events.append(json.loads(line))
-        except ValueError:
-            pass
+    return _record(task, run, workspace, transcript, _events(stdout), seconds, exit_code, timed_out)
+
+
+def _record(task: str, run: int, workspace: str, transcript: str, events: List[dict], seconds: float,
+            exit_code, timed_out: bool, reused: bool = False) -> dict:
     final = next((e for e in reversed(events) if e.get("type") == "result"), {})
     init = next((e for e in events if e.get("type") == "system"), {})
     result = grade(task, workspace)
     return {"task": task, "run": run, "passed": result["passed"], "grade": result, "seconds": seconds,
             "exit_code": exit_code, "timed_out": timed_out, "model": init.get("model"),
             "cost_usd": final.get("total_cost_usd"), "turns": final.get("num_turns"),
-            "agent_summary": (final.get("result") or "")[:1500], "audit": audit(events), "transcript": transcript}
+            "agent_summary": (final.get("result") or "")[:1500], "audit": audit(events), "transcript": transcript,
+            "reused_transcript": reused}
 
 
 def table(rows: List[dict]) -> str:
