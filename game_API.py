@@ -121,7 +121,12 @@ def _advance_turn(state: GameState, from_turn: int, skip_floaties: bool) -> int:
             state.players[candidate].has_pool_floatie_on = False
             continue
         return candidate
-    return from_turn
+    if state.players[from_turn].health > 0:
+        return from_turn
+    # Every living player's floatie was just spent and from_turn is dead: hand the turn to the next one alive.
+    living = [(from_turn + offset) % player_count for offset in range(1, player_count + 1)
+              if state.players[(from_turn + offset) % player_count].health > 0]
+    return living[0] if living else from_turn
 
 
 def _generate_upgrades(state: GameState) -> UpgradeCounts:
@@ -203,7 +208,9 @@ def _use_upgrade(state: GameState, upgrade_type: UpgradeType, target: int | None
         raise ValueError("Player does not have that upgrade")
 
     if upgrade_type == UpgradeType.POOL_FLOATIE:
-        if target is None or target == player_index or state.players[target].health <= 0:
+        if isinstance(target, bool) or not isinstance(target, int) or not 0 <= target < len(state.players):
+            raise ValueError("Pool floatie target must be a player index")
+        if target == player_index or state.players[target].health <= 0:
             raise ValueError("Pool floatie requires a different living target")
         if state.players[target].has_pool_floatie_on:
             raise ValueError("Target already has a pending skipped turn")
@@ -273,6 +280,7 @@ def eliminate_player(state: GameState, player_index: int) -> None:
     elif state.turn == player_index:
         state.turn = _advance_turn(state, player_index, skip_floaties=False)
         state.player_next_round_view = NextRound.UNKNOWN
+        state.damage = 1  # a hand saw belongs to the turn of the player who used it
 
 
 # public names for the engine

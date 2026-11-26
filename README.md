@@ -111,7 +111,9 @@ They do not reveal the hidden shell order or other players' private ejection inf
 ## Game Rules
 
 Buckshot Roulette is a 2–4 player turn-based game. Everyone starts with 5 health and no upgrades. At the
-start of each round, players see how many live and blank shells are in the gun, but not their order. Players take
+start of each round, players see how many live and blank shells are in the gun, but not their order.
+The gun is loaded by a fair coin flip per position while both kinds remain, not a uniform shuffle,
+so the next shell is live with probability 1/2 whenever both kinds are left (see `FINDINGS.md`). Players take
 turns shooting a living player or themselves. A live shell damages its target; shooting yourself with a blank
 grants another turn. Play continues until the gun is empty or one player remains. After each round, players
 take turns choosing from the available upgrades. Each player can hold at most 15 upgrades; any upgrade picked
@@ -128,6 +130,8 @@ after reaching this limit is discarded:
 
 
 • From round two onward, Pool Floatie can make another player skip their next play stage turn.
+  (As implemented, a pending floatie is also spent if that player's upgrade pick comes first; see
+  `FINDINGS.md`.)
 
 
 • From round two onward, Hand Saw increases the next live shot’s damage by 1 and can stack.
@@ -193,7 +197,7 @@ Default limits are:
 | Actions per match | 300 |
 
 Faults are recorded as `timeout` (wall-clock deadline exceeded), `error` (the bot raised an
-exception), `invalid` (the action could not be parsed), `illegal` (the game rejected the action),
+exception), `invalid` (the action could not be parsed), `illegal` (the game rejected the action, or the engine raised an unexpected error on it),
 `crash` (the bot process failed), or `budget` (the bot used its total decision-time allowance).
 `crash` and `budget` disqualify a bot immediately; other fault kinds count toward the default
 two-strike disqualification limit. A disqualified bot is eliminated and placed below every bot
@@ -230,6 +234,108 @@ For a match with `k` players, points are `(k - 1) - 2 * (place - 1)` (3, 1, -1, 
 match). The leaderboard columns are `rank`, `name`, `matches`, `avg_points`, `win_rate`, `avg_place`,
 `faults`, and `disqualified`; ranking is by `avg_points`, then `avg_place`.
 
+## RL Gym & Evaluation Suite
+
+Tooling around the engine for training, evaluating and stress-testing bots, models and coding
+agents. It uses only the standard library (gymnasium is used if installed). Run everything from
+the repository root. Measured results, with the command behind each number, are in
+[FINDINGS.md](FINDINGS.md).
+
+| What | Where | Run |
+|---|---|---|
+| RL environment | `rlgym/env.py` | `BuckshotEnv(["bots/greedy_bot"], num_players=2)` (example below) |
+| Reward functions | `rlgym/rewards.py` | `PlacementReward`, `PotentialShapedReward`, `NaiveDamageReward` |
+| Next-shell belief | `rlgym/belief.py` | `p_next_live(obs)` (exact), `p_next_live_naive(obs)` |
+| Engine verifier | `rlgym/verify.py` | `python -m rlgym.verify --seeds 200` |
+| Rollout evaluation | `rlgym/rollout.py` | `python -m rlgym.rollout bots/belief_bot bots/greedy_bot --seeds 200 --out out/rollout` |
+| Trajectory analysis | `rlgym/analysis.py` | `python -m rlgym.analysis out/rollout/trajectories.jsonl` (or a tournament `out/`) |
+| Red-team testing | `redteam/` | `python -m redteam.run` |
+| LLM player evaluation | `agents/llm_bot/`, `rlgym/llm_eval.py` | `python -m rlgym.llm_eval --provider mock --seeds 20` |
+| Coding-agent benchmark | `benchmarks/coding_agent/` | `prepare.py`, `grade.py`, `run_agents.py` (below) |
+| Tests | `tests/` | `python -m unittest` |
+
+### Environment
+
+```python
+from rlgym.env import BuckshotEnv
+from rlgym.rewards import PotentialShapedReward
+
+env = BuckshotEnv(["bots/greedy_bot", "bots/random_bot"], num_players=3, agent_seat=1,
+                  reward=PotentialShapedReward())
+obs, info = env.reset(seed=0)
+done = False
+while not done:
+    legal = [i for i, ok in enumerate(info["action_mask"]) if ok]
+    obs, reward, terminated, truncated, info = env.step(legal[0])
+    done = terminated or truncated
+print(info["placement"])
+```
+
+- **Observation:** a fixed-length (60) float vector built only from the agent's own observation,
+  with seats rotated so the agent is always seat 0. It includes the exact and naive next-shell
+  beliefs.
+- **Actions:** one `Discrete(16)` space for both stages (`rlgym/actions.py`): shoot relative seat
+  0-3, juice/coffee/glass/saw, floatie on relative seat 1-3, pick one of five upgrades.
+  `info["action_mask"]` marks the legal ones. The mask is computed from the observation and
+  checked against the engine by the verifier.
+- **Faults:** handled as in `engine.run_match`. An illegal action is a strike and the engine's
+  fallback move is played; two strikes eliminate the agent.
+- **Rewards:** `PlacementReward` returns exactly the leaderboard points.
+  `PotentialShapedReward` adds potential-based shaping on the health lead (Ng, Harada & Russell,
+  1999), so the optimal policy is unchanged. `NaiveDamageReward` is a documented hackable proxy.
+- **Opponents:** bot directories are loaded in-process by `rlgym/loader.py`, which keeps each bot's
+  helper modules private.
+
+### Evaluation CLIs
+
+- `rlgym.verify` plays random legal games and checks, after every step:
+  - engine invariants;
+  - mask soundness and completeness on deep copies;
+  - no information leaks (reshuffling the unfired shells must not change the observation);
+  - determinism.
+  It also reports how biased the naive belief is. Exit code 1 on any violation.
+- `rlgym.rollout` plays every seating on every seed, with fault rules identical to
+  `engine.run_match`; `tests/test_rollout.py` checks that outcomes match. Writes trajectory
+  JSONL (observation, action, legal mask, beliefs, fault, time) and a summary with win rate,
+  Wilson 95% interval, average points, faults, and decisions slower than 50 ms.
+- `rlgym.analysis` counts blunders (self-shot on a known live, opponent shot on a certain blank,
+  wasted glass or juice, shots against the exact belief) from rollout trajectories or engine
+  tournament logs.
+- `redteam.run` runs adversarial bots (bad floatie targets, exceptions, sleeps, slow init,
+  garbage and oversized protocol output, a bot that reads the hidden game state through `gc`, a
+  staller) through `engine.run_match` and checks that each is faulted or disqualified correctly.
+  It also measures peeking in-process vs out-of-process, stalling at the action cap, and reward
+  hacking.
+- `rlgym.llm_eval` evaluates `agents/llm_bot` against a baseline. It reports win rate, parse
+  failures, illegal actions, blunders and tokens, and logs every prompt.
+  - Providers: `mock` (offline), `anthropic` (`ANTHROPIC_API_KEY`), `openai` (`OPENAI_API_KEY`).
+  - The LLM bot needs the network and is far slower than 50 ms per decision, so it is evaluated
+    in-process, not in the sandbox.
+
+In-process tools (`rollout`, `env`, `llm_eval`) are for trusted code. A bot loaded into the same
+interpreter can read the hidden `GameState`: `redteam/bots/gc_peeker` does. **Grade untrusted
+submissions only through `engine.run_match`.**
+
+### Coding-agent benchmark
+
+```bash
+python -m benchmarks.coding_agent.prepare --task T1 --workspace /tmp/ws_t1   # public files only
+# ... an agent edits /tmp/ws_t1 ...
+python -m benchmarks.coding_agent.grade --task T1 --workspace /tmp/ws_t1
+python -m benchmarks.coding_agent.run_agents --root out/agent_runs           # Claude Code, 3 runs per task
+```
+
+- **T1:** exact next-shell probability. A plausible wrong answer is included, and the grader
+  rejects it.
+- **T2:** fix the pool floatie crash in the original engine without changing any legal game. The
+  grader rejects a fix that only checks the upper bound.
+- **T3:** write a bot that beats greedy_bot through the sandboxed engine on hidden seeds.
+
+The grader rebuilds the pristine workspace, rejects edits to protected files (sha256), and runs
+candidate code in a separate `python -I` process against its own engine copy. Hidden tests live
+in `benchmarks/coding_agent/hidden/` and never enter the workspace. Agent results are in
+`benchmarks/coding_agent/RESULTS.md`.
+
 ## Repository Guide
 
 - `game_API.py`: game simulation and state transitions
@@ -240,7 +346,13 @@ match). The leaderboard columns are `rank`, `name`, `matches`, `avg_points`, `wi
 - `engine/tournament.py`: tournament scheduling and execution
 - `engine/run_match.py`: runs one match and writes its log
 - `engine/export_logs.py`: exports per-model training data
-- `bots/random_bot/`: baseline bot
+- `bots/random_bot/`, `bots/greedy_bot/`, `bots/belief_bot/`: baseline bots
 - `Dockerfile`: sandbox image configuration
+- `rlgym/`: RL environment, rewards, belief, verifier, rollout, analysis and LLM evaluation
+- `redteam/`: adversarial bots and the containment harness
+- `agents/llm_bot/`: language-model player (in-process evaluation only)
+- `benchmarks/coding_agent/`: coding-agent benchmark with hidden graders
+- `tests/`: `python -m unittest`
+- `FINDINGS.md`: engine bugs, generator analysis and red-team results, with measurements
 
 ## You can check out the game at [Buckshot Roulette by CSES NITW](https://github.com/csesnitw/buckshot-roulette) to play and maybe get a better idea about it!
