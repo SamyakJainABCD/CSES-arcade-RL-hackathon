@@ -127,6 +127,8 @@ def run_match(seats: List[Submission], seed: int, log_path: Optional[str] = None
                     (api.step_PLAY if stage == Stage.PLAY else api.step_PICK_UPGRADE)(state, action)
                 except ValueError as exc:
                     raise BotFault("illegal", str(exc))
+                except Exception as exc:  # defence in depth: an engine bug must not end the tournament
+                    raise BotFault("illegal", f"engine error: {exc!r}")
             except BotFault as fault:
                 record["fault"], record["detail"] = fault.kind, fault.detail[:500]
                 record_fault(seat, fault)

@@ -203,7 +203,9 @@ def _use_upgrade(state: GameState, upgrade_type: UpgradeType, target: int | None
         raise ValueError("Player does not have that upgrade")
 
     if upgrade_type == UpgradeType.POOL_FLOATIE:
-        if target is None or target == player_index or state.players[target].health <= 0:
+        if isinstance(target, bool) or not isinstance(target, int) or not 0 <= target < len(state.players):
+            raise ValueError("Pool floatie target must be a player index")
+        if target == player_index or state.players[target].health <= 0:
             raise ValueError("Pool floatie requires a different living target")
         if state.players[target].has_pool_floatie_on:
             raise ValueError("Target already has a pending skipped turn")
