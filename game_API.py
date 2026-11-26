@@ -280,6 +280,7 @@ def eliminate_player(state: GameState, player_index: int) -> None:
     elif state.turn == player_index:
         state.turn = _advance_turn(state, player_index, skip_floaties=False)
         state.player_next_round_view = NextRound.UNKNOWN
+        state.damage = 1  # a hand saw belongs to the turn of the player who used it
 
 
 # public names for the engine

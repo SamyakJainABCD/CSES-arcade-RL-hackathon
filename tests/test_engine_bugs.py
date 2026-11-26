@@ -128,5 +128,15 @@ class TurnAfterSuicideTest(unittest.TestCase):
             (api.step_PLAY if state.stage == Stage.PLAY else api.step_PICK_UPGRADE)(state, random_legal(obs, rng))
 
 
+class SawAfterDisqualificationTest(unittest.TestCase):
+    def test_saw_bonus_does_not_pass_to_the_next_player(self):
+        state = api.initGame(3, 3)
+        state.players[0].upgrades.hand_saw = 1
+        api.step_PLAY(state, play_action(ActionType.USE_UPGRADE, UpgradeType.HAND_SAW))
+        api.eliminate_player(state, 0)  # e.g. second strike right after sawing
+        self.assertEqual(state.turn, 1)
+        self.assertEqual(state.damage, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
